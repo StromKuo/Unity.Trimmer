@@ -10,57 +10,60 @@ namespace Unity.Trimmer.Cli.Commands
     {
         public static void Execute(string input, string output, string classdata, string font)
         {
-            var manager = new AssetsManager(); 
+            var manager = new AssetsManager();
             var asset = manager.LoadAssetsFile(input, false);
 
             if (!string.IsNullOrEmpty(classdata))
                 manager.LoadClassPackage(classdata); // TODO: Is this necessary?
-            
+
             manager.LoadClassDatabaseFromPackage(asset.file.typeTree.unityVersion);
-            
+
             Console.WriteLine($"Asset found: {asset.name} ({asset.file.typeTree.unityVersion})");
 
             byte[] fontBytes = null;
             if (!string.IsNullOrEmpty(font))
                 fontBytes = File.ReadAllBytes(font);
-            
+
             var replacers = new List<AssetsReplacer>();
             var empty = new byte[] { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }; // 2x2 32bit
-            
+
             // Loop all assets to find all Texture2D and replace them with 2x2 empty one
             // TODO: Still left with ~350kb of crap, seems like there is a compute shader worth 200kb, not sure if worth trying to slim the rest, when compressed with brotli we're left with less than 66kb which is a huge gain compared to before
-            foreach (var info in asset.table.assetFileInfo)
+            foreach (var info in asset.table.GetAssetsOfType((int)AssetClassID.Texture2D))
             {
                 var baseField = manager.GetTypeInstance(asset, info).GetBaseField();
                 var name = baseField.Get("m_Name").GetValue().AsString();
 
-                Console.WriteLine($"Found asset: {name} / {(AssetClassID) info.curFileType}");
-                
-                // We've got a `Texture2D` so replace it
-                if (info.curFileType == (int) AssetClassID.Texture2D)
-                {
-                    var texture = TextureFile.ReadTextureFile(baseField);
-                    if (texture.m_Width < 2 && texture.m_Height < 2) continue;
-                    
-                    Console.WriteLine($"{texture.m_Width} / {texture.m_Height} / {(TextureFormat) texture.m_TextureFormat}");
-                    
-                    // Create the new texture
-                    texture.m_TextureFormat = (int) TextureFormat.RGBA32;
-                    var data = TextureFile.Encode(empty, (TextureFormat) texture.m_TextureFormat, 2, 2);
-                    
-                    texture.SetTextureDataRaw(data, 2, 2);
-                    texture.WriteTo(baseField);
-                    
-                    var bytes = baseField.WriteToByteArray();
-                    var replacer = new AssetsReplacerFromMemory(0, info.index, (int) info.curFileType, 0xffff, bytes);
-                    replacers.Add(replacer);
+                Console.WriteLine($"Found asset: {name} / {(AssetClassID)info.curFileType}");
 
-                    Console.WriteLine($"*** Texture replaced!");
-                }
-                
-                // Also replace "Arial" font since we don't need it
-                if (fontBytes != null && info.curFileType == (int) AssetClassID.Font)
+                var texture = TextureFile.ReadTextureFile(baseField);
+                if (texture.m_Width < 2 && texture.m_Height < 2) continue;
+
+                Console.WriteLine($"{texture.m_Width} / {texture.m_Height} / {(TextureFormat)texture.m_TextureFormat}");
+
+                // Create the new texture
+                texture.m_TextureFormat = (int)TextureFormat.RGBA32;
+                var data = TextureFile.Encode(empty, (TextureFormat)texture.m_TextureFormat, 2, 2);
+
+                texture.SetTextureDataRaw(data, 2, 2);
+                texture.WriteTo(baseField);
+
+                var bytes = baseField.WriteToByteArray();
+                var replacer = new AssetsReplacerFromMemory(0, info.index, (int)info.curFileType, 0xffff, bytes);
+                replacers.Add(replacer);
+
+                Console.WriteLine($"*** Texture replaced!");
+            }
+
+            if (fontBytes != null)
+            {
+                foreach (var info in asset.table.GetAssetsOfType((int)AssetClassID.Font))
                 {
+                    var baseField = manager.GetTypeInstance(asset, info).GetBaseField();
+                    var name = baseField.Get("m_Name").GetValue().AsString();
+
+                    Console.WriteLine($"Found asset: {name} / {(AssetClassID)info.curFileType}");
+
                     Console.WriteLine($"Found Font!");
                     foreach (var child in baseField.children)
                     {
@@ -82,9 +85,9 @@ namespace Unity.Trimmer.Cli.Commands
                                     {
                                         bytes[i] = (byte) child2[i].GetValue().AsInt();
                                     }
-                                    
+
                                     File.WriteAllBytes($"{font}.copy", bytes);*/
-                                    
+
                                     // Overwrite data
                                     child2.GetValue().Set(new AssetTypeArray(fontBytes.Length));
 
@@ -97,10 +100,10 @@ namespace Unity.Trimmer.Cli.Commands
                                     }
 
                                     child2.SetChildrenList(children);
-                                    
+
                                     // Replace
                                     var bytes = baseField.WriteToByteArray();
-                                    var replacer = new AssetsReplacerFromMemory(0, info.index, (int) info.curFileType, 0xffff, bytes);
+                                    var replacer = new AssetsReplacerFromMemory(0, info.index, (int)info.curFileType, 0xffff, bytes);
                                     replacers.Add(replacer);
                                 }
                             }
@@ -108,16 +111,16 @@ namespace Unity.Trimmer.Cli.Commands
                     }
                 }
             }
-            
+
             Console.WriteLine($"Writing output to: \"{output}\"");
-            
+
             File.Delete(output);
             using (var stream = File.OpenWrite(output))
             using (var writer = new AssetsFileWriter(stream))
                 asset.file.Write(writer, 0, replacers, 0);
 
             Console.WriteLine($"Done!");
-            
+
             manager.UnloadAllAssetsFiles();
         }
     }
